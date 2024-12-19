@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translator App</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: white;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .navbar {
+            background-color: #333;
+            overflow: hidden;
+            text-align: center;
+            padding: 14px 20px;
+        }
+        .navbar a {
+            color: white;
+            text-align: center;
+            padding: 14px 20px;
+            text-decoration: none;
+        }
+        .navbar a:hover {
+            background-color: #ddd;
+            color: black;
+        }
+        .container {
+            margin: 50px auto;
+            width: 80%;
+            max-width: 600px;
+            padding-bottom: 60px; /* Space for footer */
+        }
+        textarea, input[type="submit"], select {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: none;
+            background-color: #444;
+            color: white;
+            border-radius: 4px;
+        }
+        textarea {
+            min-height: 100px;
+            font-size: 16px;
+        }
+        .error {
+            color: #ff4444;
+            background-color: #2a0000;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #444;
+            color: white;
+            min-width: 120px;
+        }
+        .button:hover:not(:disabled) {
+            background-color: #555;
+        }
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .button.recording {
+            background-color: #ff4444;
+        }
+        #status {
+            margin: 10px 0;
+            font-style: italic;
+            min-height: 20px;
+        }
+        .translation-box {
+            background-color: #333;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        footer {
+            text-align: center;
+            padding: 10px 0;
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            background-color: #333;
+        }
+        footer a {
+            color: white;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <a href="/">Home</a>
+    </div>
+    
+    <div class="container">
+        <h1>Translator App</h1>
+        
+        {%- if error is defined and error %}
+        <div class="error">{{ error }}</div>
+        {%- endif %}
+
+        <div class="controls">
+            <button id="recordButton" class="button">Start Recording</button>
+            <button id="stopButton" class="button" disabled>Stop Recording</button>
+        </div>
+        <div id="status"></div>
+
+        <form id="translationForm" method="POST" action="/">
+            <textarea name="input_text" id="inputText" placeholder="Enter text to translate..." rows="4">{{- input_text if input_text is defined else '' -}}</textarea>
+            
+            <label for="target_language">Select Target Language:</label>
+            <select id="target_language" name="target_language">
+                {%- for language in supported_languages.keys() %}
+                <option value="{{ language }}" {% if target_language is defined and target_language == language %}selected{% endif %}>
+                    {{- language -}}
+                </option>
+                {%- endfor %}
+            </select>
+            
+            <button type="submit" class="button">Translate</button>
+        </form>
+
+        <div id="translationOutput" class="translation-box" style="display: none;">
+            <h2>Translated Text:</h2>
+            <p id="outputText">{{ output_text if output_text is defined else '' }}</p>
+            <button id="playButton" class="button">Play Translation</button>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        const recordButton = document.getElementById('recordButton');
+        const stopButton = document.getElementById('stopButton');
+        const playButton = document.getElementById('playButton');
+        const status = document.getElementById('status');
+        const inputText = document.getElementById('inputText');
+        const outputText = document.getElementById('outputText');
+        const translationOutput = document.getElementById('translationOutput');
+        const translationForm = document.getElementById('translationForm');
+
+        // Show translation box if there's output text
+        if (outputText.textContent.trim()) {
+            translationOutput.style.display = 'block';
+        }
+
+        // Handle form submission
+        translationForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const text = inputText.value.trim();
+            const targetLanguage = document.getElementById('target_language').value;
+            
+            if (!text) {
+                status.textContent = 'Please enter text to translate';
+                return;
+            }
+
+            try {
+                const response = await fetch('/translate-text', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        target_language: targetLanguage
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    status.textContent = `Error: ${data.error}`;
+                } else {
+                    outputText.textContent = data.translated_text;
+                    translationOutput.style.display = 'block';
+                    status.textContent = '';
+                }
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+            }
+        });
+        
+        // Record button click handler
+        recordButton.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob);
+                    
+                    status.textContent = 'Processing audio...';
+                    
+                    try {
+                        // Convert speech to text
+                        const response = await fetch('/speech-to-text', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        
+                        if (data.error) {
+                            status.textContent = `Error: ${data.error}`;
+                        } else {
+                            // Set the recognized text and submit the form
+                            inputText.value = data.text;
+                            translationForm.dispatchEvent(new Event('submit'));
+                        }
+                    } catch (error) {
+                        status.textContent = `Error: ${error.message}`;
+                    }
+                };
+                
+                mediaRecorder.start();
+                recordButton.disabled = true;
+                stopButton.disabled = false;
+                recordButton.classList.add('recording');
+                status.textContent = 'Recording...';
+                
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+            }
+        });
+        
+        // Stop button click handler
+        stopButton.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                recordButton.disabled = false;
+                stopButton.disabled = true;
+                recordButton.classList.remove('recording');
+            }
+        });
+        
+        // Play button click handler
+        playButton.addEventListener('click', async () => {
+            const text = outputText.textContent.trim();
+            const targetLanguage = document.getElementById('target_language').value;
+            
+            if (!text) {
+                status.textContent = 'No text to play';
+                return;
+            }
+            
+            try {
+                status.textContent = 'Generating audio...';
+                playButton.disabled = true;
+                
+                const response = await fetch('/text-to-speech', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        target_language: targetLanguage
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audio = new Audio(URL.createObjectURL(blob));
+                    
+                    audio.onended = () => {
+                        playButton.disabled = false;
+                        status.textContent = '';
+                    };
+                    
+                    audio.play();
+                    status.textContent = 'Playing...';
+                } else {
+                    const data = await response.json();
+                    status.textContent = `Error: ${data.error}`;
+                    playButton.disabled = false;
+                }
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+                playButton.disabled = false;
+            }
+        });
+    </script>
+
+    <footer>
+        Dwayne Crichlow | AI 602 - Programminig in Python (Section: 1) | December 17, 2024
+    </footer>
+</body>
+</html>
